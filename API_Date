@@ -1,0 +1,93 @@
+import requests
+import numpy as np
+from datetime import datetime, timezone, timedelta
+import math
+KRASNODAR_LAT = 45.0355
+KRASNODAR_LON = 38.9753
+POINTS_NEEDED = 128
+SEARCH_RANGE = 500
+def get_events():
+    """События за последние N_Day дней"""
+    N_Day= 365
+    now_time = datetime.now(timezone.utc)
+    month_ago = now_time - timedelta(days=N_Day)
+    query_params = {
+        "format": "geojson",
+        "starttime": month_ago.date().isoformat(),
+        "endtime": now_time.date().isoformat(),
+        "minmagnitude": 3.0,
+        "latitude": KRASNODAR_LAT,
+        "longitude": KRASNODAR_LON,
+        "maxradiuskm": SEARCH_RANGE,
+        "limit": 5
+    }
+    api_url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+    try:
+        response = requests.get(api_url, query_params, timeout=8)
+        if response.status_code == 200:
+            return response.json().get("features", [])
+    except:
+        pass
+    return []
+def compute_distance(lat2, lon2):
+    """Вычислить дистанцию от Краснодара"""
+    R_earth = 6371
+    lat1 = math.radians(KRASNODAR_LAT)
+    lon1 = math.radians(KRASNODAR_LON)
+    lat2 = math.radians(lat2)
+    lon2 = math.radians(lon2)
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)*math.sin(dlat/2) + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)*math.sin(dlon/2)
+    return R_earth * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+def generate_waveform(magnitude):
+    """Создать волновую форму на основе магнитуды"""
+    time_points = np.arange(POINTS_NEEDED)
+    base_wave = 0.7 * np.sin(2 * np.pi * 0.8/magnitude * time_points)
+    harmonic = 0.3 * np.sin(2 * np.pi * 2.5 * 0.8/magnitude * time_points)
+    high_freq = 0.1 * np.sin(2 * np.pi * 5.0 * 0.8/magnitude * time_points)
+    combined = base_wave + harmonic + high_freq
+    if np.max(np.abs(combined)) > 0:
+        combined = combined / np.max(np.abs(combined))
+    return combined
+def main():
+    events = get_events()
+    if not events:
+        print("Событий не обнаружено")
+        return
+    print(f"Обнаружено: {len(events)} событий")
+    # Сортируем по магнитуде
+    events.sort(key=lambda x: x['properties']['mag'], reverse=True)
+    data_lines = []
+    desc_lines = ["Информация о событиях\n"]
+    for idx, event in enumerate(events):
+        details = event['properties']
+        location = event['geometry']['coordinates']
+        # Расстояние
+        dist_km = compute_distance(location[1], location[0])
+        # Время
+        event_time = datetime.fromtimestamp(details['time']/1000)
+        time_str = event_time.strftime('%d.%m.%Y %H:%M')
+        # Описание
+        desc_lines.append(f"Событие {idx+1}:")
+        desc_lines.append(f"Сила: {details['mag']:.1f}")
+        desc_lines.append(f"Где: {details['place']}")
+        desc_lines.append(f"Когда: {time_str}")
+        desc_lines.append(f"Координаты: {location[1]:.3f} с.ш., {location[0]:.3f} в.д.")
+        desc_lines.append(f"Глубина: {location[2]:.1f} км")
+        desc_lines.append(f"От Краснодара: {dist_km:.1f} км")
+        desc_lines.append("")
+        # Данные для анализа
+        waveform = generate_waveform(details['mag'])
+        data_lines.append(" ".join([f"{val:.7f}" for val in waveform]))
+    # Сохранение
+    with open('wave_data.txt', 'w', encoding='utf-8') as f:
+        f.write("\n\n".join(data_lines))
+    with open('events_info.txt', 'w', encoding='utf-8') as f:
+        f.write("\n".join(desc_lines))
+    print("Файлы созданы:")
+    print("  wave_data.txt - данные для обработки")
+    print("  events_info.txt - описание событий")
+
+if __name__ == "__main__":
+    main()
